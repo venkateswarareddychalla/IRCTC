@@ -37,11 +37,11 @@ app.listen(3000, () => console.log("Server running at http://localhost:3000/"));
 // Health check
 app.get("/", (req, res) => res.send("API is Working"));
 
-// JWT utils
+// JWT
 const JWT_SECRET_KEY = "#JWT_SECRET_KEY";
 const generateJWTToken = (id) => jwt.sign({ id }, JWT_SECRET_KEY, { expiresIn: "30d" });
 
-// --------------------- USER APIs ---------------------
+
 
 // Register
 app.post("/register", async (req, res) => {
@@ -91,7 +91,7 @@ app.post("/login", async (req, res) => {
   }
 });
 
-// --------------------- AUTH MIDDLEWARE ---------------------
+// AUTH MIDDLEWARE
 
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -107,4 +107,18 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+
+// user profile
+app.get("/profile", authenticateToken, (req, res) => {
+  try {
+    const user = db.prepare(`SELECT id, name, email FROM users WHERE id = ?`).get(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, message: "User Not Found" });
+    res.status(200).json({ success: true, user });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
 
