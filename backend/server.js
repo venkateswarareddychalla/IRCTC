@@ -25,7 +25,20 @@ db.prepare(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     email TEXT UNIQUE,
-    password TEXT
+    password TEXT,
+    age INTEGER,
+    gender TEXT
+  );
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS routes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    origin TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    distance REAL NOT NULL,
+    time_taken REAL NOT NULL,
+    fare_ind REAL NOT NULL
   );
 `).run();
 
@@ -45,12 +58,12 @@ const generateJWTToken = (id) => jwt.sign({ id }, JWT_SECRET_KEY, { expiresIn: "
 
 // Register
 app.post("/register", async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, age, gender } = req.body;
 
-  if (!name || !email || !password)
+  if (!name || !email || !password || !age || !gender)
     return res
       .status(400)
-      .json({ success: false, message: "Name, Email and Password are required" });
+      .json({ success: false, message: "Name, Email, Password, Age and Gender are required" });
 
   try {
     const userExists = db.prepare(`SELECT * FROM users WHERE email = ?`).get(email);
@@ -59,8 +72,8 @@ app.post("/register", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const insert = db.prepare(`INSERT INTO users(name, email, password) VALUES(?, ?, ?)`);
-    const result = insert.run(name, email, hashedPassword);
+    const insert = db.prepare(`INSERT INTO users(name, email, password, age, gender) VALUES(?, ?, ?, ?, ?)`);
+    const result = insert.run(name, email, hashedPassword, age, gender);
 
     const token = generateJWTToken(result.lastInsertRowid);
     res.status(200).json({ success: true, message: "User Registered Successfully", token });
