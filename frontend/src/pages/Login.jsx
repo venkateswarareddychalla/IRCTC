@@ -18,7 +18,7 @@ export default function Login({ onLogin }) {
       const body = isLogin
         ? { email, password }
         : { name, email, password, age, gender };
-      const res = await fetch(`https://fullstack-practice-gfa0.onrender.com${endpoint}`, {
+      const res = await fetch(`http://localhost:3000${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

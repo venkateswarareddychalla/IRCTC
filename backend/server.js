@@ -1,3 +1,4 @@
+
 import express from "express";
 import Database from "better-sqlite3";
 import cors from "cors";
@@ -27,7 +28,8 @@ db.prepare(`
     email TEXT UNIQUE,
     password TEXT,
     age INTEGER,
-    gender TEXT
+    gender TEXT,
+    berth_preference TEXT
   );
 `).run();
 
@@ -39,6 +41,55 @@ db.prepare(`
     distance REAL NOT NULL,
     time_taken REAL NOT NULL,
     fare_ind REAL NOT NULL
+  );
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS trains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    train_number TEXT NOT NULL,
+    train_name TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    date TEXT NOT NULL,
+    class TEXT NOT NULL,
+    quota TEXT NOT NULL,
+    seats_available INTEGER NOT NULL,
+    price REAL NOT NULL DEFAULT 500
+  );
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS payment_methods (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    details TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS passengers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    age INTEGER NOT NULL,
+    gender TEXT NOT NULL,
+    berth_preference TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    train_id INTEGER NOT NULL,
+    passenger_ids TEXT NOT NULL,
+    status TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (train_id) REFERENCES trains(id)
   );
 `).run();
 
@@ -125,10 +176,244 @@ const authenticateToken = (req, res, next) => {
 // user profile
 app.get("/profile", authenticateToken, (req, res) => {
   try {
-    const user = db.prepare(`SELECT id, name, email FROM users WHERE id = ?`).get(req.userId);
+    const user = db.prepare(`SELECT id, name, email, age, gender, berth_preference FROM users WHERE id = ?`).get(req.userId);
     if (!user)
       return res.status(404).json({ success: false, message: "User Not Found" });
     res.status(200).json({ success: true, user });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Add payment method
+app.post("/add-payment-method", authenticateToken, (req, res) => {
+  const { type, details } = req.body;
+  if (!type || !details)
+    return res.status(400).json({ success: false, message: "Type and details are required" });
+
+  try {
+    const insert = db.prepare(`INSERT INTO payment_methods(user_id, type, details) VALUES(?, ?, ?)`);
+    insert.run(req.userId, type, details);
+    res.status(200).json({ success: true, message: "Payment method added" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Save passenger details (update user)
+app.post("/save-passenger", authenticateToken, (req, res) => {
+  const { berth_preference } = req.body;
+  try {
+    const update = db.prepare(`UPDATE users SET berth_preference = ? WHERE id = ?`);
+    update.run(berth_preference, req.userId);
+    res.status(200).json({ success: true, message: "Passenger details saved" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Search trains
+app.get("/search-trains", (req, res) => {
+  const { origin, destination, date } = req.query;
+  if (!origin || !destination || !date)
+    return res.status(400).json({ success: false, message: "Origin, destination, and date are required" });
+
+  try {
+    const trains = db.prepare(`
+      SELECT t.*, COALESCE(r.fare_ind, t.price) as fare FROM trains t
+      LEFT JOIN routes r ON t.origin = r.origin AND t.destination = r.destination
+      WHERE LOWER(TRIM(t.origin)) LIKE LOWER(TRIM(?)) AND LOWER(TRIM(t.destination)) LIKE LOWER(TRIM(?)) AND t.date = ?
+    `).all('%' + origin.trim() + '%', '%' + destination.trim() + '%', date);
+    res.status(200).json({ success: true, trains });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Check availability
+app.get("/check-availability", (req, res) => {
+  const { train_id, class: trainClass, quota } = req.query;
+  if (!train_id || !trainClass || !quota)
+    return res.status(400).json({ success: false, message: "Train ID, class, and quota are required" });
+
+  try {
+    const train = db.prepare(`SELECT seats_available FROM trains WHERE id = ? AND class = ? AND quota = ?`).get(train_id, trainClass, quota);
+    if (!train)
+      return res.status(404).json({ success: false, message: "Train not found" });
+    res.status(200).json({ success: true, available: train.seats_available > 0, seats: train.seats_available });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Book ticket
+app.post("/book-ticket", authenticateToken, (req, res) => {
+  const { train_id, passenger_ids } = req.body; // passenger_ids as comma-separated string of user ids
+  if (!train_id || !passenger_ids)
+    return res.status(400).json({ success: false, message: "Train ID and passenger IDs are required" });
+
+  try {
+    const insert = db.prepare(`INSERT INTO bookings(user_id, train_id, passenger_ids, status) VALUES(?, ?, ?, ?)`);
+    const result = insert.run(req.userId, train_id, passenger_ids, "pending");
+    res.status(200).json({ success: true, booking_id: result.lastInsertRowid, message: "Booking initiated" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Confirm booking
+app.post("/confirm-booking", authenticateToken, (req, res) => {
+  const { booking_id } = req.body;
+  if (!booking_id)
+    return res.status(400).json({ success: false, message: "Booking ID is required" });
+
+  try {
+    const update = db.prepare(`UPDATE bookings SET status = ? WHERE id = ? AND user_id = ?`);
+    update.run("confirmed", booking_id, req.userId);
+    // Decrease seats
+    const booking = db.prepare(`SELECT train_id, passenger_ids FROM bookings WHERE id = ? AND user_id = ?`).get(booking_id, req.userId);
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    const passengerCount = booking.passenger_ids.split(',').length;
+    db.prepare(`UPDATE trains SET seats_available = seats_available - ? WHERE id = ?`).run(passengerCount, booking.train_id);
+    res.status(200).json({ success: true, message: "Booking confirmed" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Cancel booking
+app.post("/cancel-booking", authenticateToken, (req, res) => {
+  const { booking_id } = req.body;
+  if (!booking_id)
+    return res.status(400).json({ success: false, message: "Booking ID is required" });
+
+  try {
+    const update = db.prepare(`UPDATE bookings SET status = ? WHERE id = ? AND user_id = ?`);
+    update.run("cancelled", booking_id, req.userId);
+    // Increase seats
+    const booking = db.prepare(`SELECT train_id, passenger_ids FROM bookings WHERE id = ? AND user_id = ?`).get(booking_id, req.userId);
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    const passengerCount = booking.passenger_ids.split(',').length;
+    db.prepare(`UPDATE trains SET seats_available = seats_available + ? WHERE id = ?`).run(passengerCount, booking.train_id);
+    res.status(200).json({ success: true, message: "Booking cancelled" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Add train (admin)
+app.post("/add-train", (req, res) => {
+  const { train_number, train_name, origin, destination, date, class: trainClass, quota, seats_available, price } = req.body;
+  if (!train_number || !train_name || !origin || !destination || !date || !trainClass || !quota || !seats_available || !price)
+    return res.status(400).json({ success: false, message: "All fields are required" });
+
+  try {
+    const insert = db.prepare(`INSERT INTO trains(train_number, train_name, origin, destination, date, class, quota, seats_available, price) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    insert.run(train_number, train_name, origin, destination, date, trainClass, quota, seats_available, parseFloat(price));
+    res.status(200).json({ success: true, message: "Train added" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Get all trains (admin)
+app.get("/get-trains", (req, res) => {
+  try {
+    const trains = db.prepare(`
+      SELECT t.*, COALESCE(r.fare_ind, t.price) as fare FROM trains t
+      LEFT JOIN routes r ON t.origin = r.origin AND t.destination = r.destination
+    `).all();
+    res.status(200).json({ success: true, trains });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Get user bookings
+app.get("/my-bookings", authenticateToken, (req, res) => {
+  try {
+    const bookings = db.prepare(`
+      SELECT b.id, b.status, t.train_number, t.origin, t.destination, t.date, t.class, t.quota
+      FROM bookings b
+      JOIN trains t ON b.train_id = t.id
+      WHERE b.user_id = ?
+    `).all(req.userId);
+    res.status(200).json({ success: true, bookings });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Add passenger to user's master list
+app.post("/add-passenger", authenticateToken, (req, res) => {
+  const { name, age, gender, berth_preference } = req.body;
+  if (!name || !age || !gender)
+    return res.status(400).json({ success: false, message: "Name, age, and gender are required" });
+
+  try {
+    const insert = db.prepare(`INSERT INTO passengers(user_id, name, age, gender, berth_preference) VALUES(?, ?, ?, ?, ?)`);
+    const result = insert.run(req.userId, name, age, gender, berth_preference || null);
+    res.status(200).json({ success: true, message: "Passenger added to master list", passenger_id: result.lastInsertRowid });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Get user's passenger master list
+app.get("/my-passengers", authenticateToken, (req, res) => {
+  try {
+    const passengers = db.prepare(`SELECT id, name, age, gender, berth_preference FROM passengers WHERE user_id = ?`).all(req.userId);
+    res.status(200).json({ success: true, passengers });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Get all users (admin)
+app.get("/get-all-users", (req, res) => {
+  try {
+    const users = db.prepare(`SELECT id, name, email, age, gender, berth_preference FROM users`).all();
+    res.status(200).json({ success: true, users });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Get all bookings (admin)
+app.get("/get-all-bookings", (req, res) => {
+  try {
+    const bookings = db.prepare(`
+      SELECT b.id, b.status, b.passenger_ids, u.name as user_name, u.email as user_email, t.train_number, t.train_name, t.origin, t.destination, t.date, t.class, t.quota
+      FROM bookings b
+      JOIN users u ON b.user_id = u.id
+      JOIN trains t ON b.train_id = t.id
+    `).all();
+    res.status(200).json({ success: true, bookings });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+// Get user's payment methods
+app.get("/get-payment-methods", authenticateToken, (req, res) => {
+  try {
+    const paymentMethods = db.prepare(`SELECT id, type, details FROM payment_methods WHERE user_id = ?`).all(req.userId);
+    res.status(200).json({ success: true, paymentMethods });
   } catch (error) {
     console.log(error);
     res.status(500).json({ success: false, message: "Server Error" });
