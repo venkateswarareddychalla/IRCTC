@@ -9,6 +9,8 @@ export default function BookTicket({ onLogout }) {
   const [passengers, setPassengers] = useState([]);
   const [masterPassengers, setMasterPassengers] = useState([]);
   const [selectedPassengers, setSelectedPassengers] = useState([]);
+  const [selectedClass, setSelectedClass] = useState("");
+  const [selectedQuota, setSelectedQuota] = useState("");
   const [error, setError] = useState("");
   const token = localStorage.getItem("token");
 
@@ -30,12 +32,16 @@ export default function BookTicket({ onLogout }) {
     };
     fetchMasterPassengers();
   }, []);
-  const totalFare = useMemo(() => {
+  const selectedClassData = useMemo(() => {
+    if (!train || !selectedClass || !selectedQuota) return null;
+    return train.classes.find(cls => cls.class === selectedClass && cls.quota === selectedQuota);
+  }, [train, selectedClass, selectedQuota]);
 
+  const totalFare = useMemo(() => {
     const totalPassengers = selectedPassengers.length + passengers.length;
-    const baseFare = train ? parseFloat(train.fare) || 0 : 0;
+    const baseFare = selectedClassData ? parseFloat(selectedClassData.fare) || 0 : 0;
     return totalPassengers * baseFare;
-  }, [selectedPassengers, passengers, train]);
+  }, [selectedPassengers, passengers, selectedClassData]);
 
   const addPassenger = () => {
     setPassengers([...passengers, { id: "", name: "", age: "", gender: "", isEditing: true }]);
@@ -89,6 +95,10 @@ export default function BookTicket({ onLogout }) {
   };
 
   const handleBook = async () => {
+    if (!selectedClass || !selectedQuota) {
+      setError("Please select class and quota.");
+      return;
+    }
     // Combine selected master passengers and new passengers
     const allPassengerIds = [...selectedPassengers, ...passengers.map(p => p.id || "1")].join(","); // Mock for new ones
     try {
@@ -98,7 +108,12 @@ export default function BookTicket({ onLogout }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ train_id: train.id, passenger_ids: allPassengerIds }),
+        body: JSON.stringify({
+          train_id: train.id,
+          passenger_ids: allPassengerIds,
+          class: selectedClass,
+          quota: selectedQuota
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -118,6 +133,35 @@ export default function BookTicket({ onLogout }) {
       <Header onLogout={onLogout} />
       <div className="w-full bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
         <h2 className="text-2xl font-bold mb-4">Book Ticket for {train.train_number}</h2>
+
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold mb-2">Select Class and Quota</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <select
+              value={selectedClass}
+              onChange={(e) => setSelectedClass(e.target.value)}
+              className="px-4 py-2 border border-gray-300 rounded-md"
+              required
+            >
+              <option value="">Select Class</option>
+              {train.classes.map((cls, idx) => (
+                <option key={idx} value={cls.class}>{cls.class}</option>
+              ))}
+            </select>
+            <select
+              value={selectedQuota}
+              onChange={(e) => setSelectedQuota(e.target.value)}
+              className="px-4 py-2 border border-gray-300 rounded-md"
+              required
+            >
+              <option value="">Select Quota</option>
+              {train.classes.filter(cls => cls.class === selectedClass).map((cls, idx) => (
+                <option key={idx} value={cls.quota}>{cls.quota}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <p className="text-lg mb-4">Total Fare: ₹{totalFare.toFixed(2)}</p>
 
         <div className="mb-4">

@@ -9,6 +9,7 @@ export default function SearchTrains({ onLogout }) {
   const [trains, setTrains] = useState([]);
   const [allTrains, setAllTrains] = useState([]);
   const [error, setError] = useState("");
+  const [showNoTrainsMessage, setShowNoTrainsMessage] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -28,11 +29,17 @@ export default function SearchTrains({ onLogout }) {
 
   const handleSearch = async (e) => {
     e.preventDefault();
+    setError("");
+    setShowNoTrainsMessage(false);
     try {
       const res = await fetch(`http://localhost:3000/search-trains?origin=${origin}&destination=${destination}&date=${date}`);
       const data = await res.json();
       if (data.success) {
         setTrains(data.trains);
+        if (data.trains.length === 0) {
+          setShowNoTrainsMessage(true);
+          setTimeout(() => setShowNoTrainsMessage(false), 5000);
+        }
       } else {
         setError(data.message);
       }
@@ -108,6 +115,12 @@ export default function SearchTrains({ onLogout }) {
         {error && (
           <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
             {error}
+          </div>
+        )}
+
+        {showNoTrainsMessage && (
+          <div className="mb-6 p-4 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-lg">
+            No trains found matching your search criteria.
           </div>
         )}
 

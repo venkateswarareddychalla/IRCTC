@@ -154,8 +154,8 @@ export default function Profile({ onLogout }) {
                 <span className="text-gray-800">{user.berth_preference || 'Not set'}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="font-medium text-gray-600">Payment Methods:</span>
-                <span className="text-gray-800">{paymentMethods.length > 0 ? paymentMethods.map(pm => `${pm.type}: ${pm.details}`).join(', ') : 'None added'}</span>
+                <span className="font-medium text-gray-600">Payment Method:</span>
+                <span className="text-gray-800">{paymentMethods.length > 0 ? `${paymentMethods[paymentMethods.length - 1].type}: ${paymentMethods[paymentMethods.length - 1].details}` : 'None added'}</span>
               </div>
             </div>
           </div>
