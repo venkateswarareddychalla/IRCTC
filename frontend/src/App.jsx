@@ -10,6 +10,7 @@ import BookTicket from "./pages/BookTicket";
 import Payment from "./pages/Payment";
 import Confirmation from "./pages/Confirmation";
 import Passengers from "./pages/Passengers";
+import AdminDashboard from "./pages/AdminDashboard";
 import Header from "./components/Header";
 
 
@@ -110,6 +111,16 @@ export default function App() {
           element={
             <PrivateRoute token={token}>
               <Passengers onLogout={handleLogout} />
+            </PrivateRoute>
+          }
+        />
+
+        {/* Admin Dashboard */}
+        <Route
+          path="/admin"
+          element={
+            <PrivateRoute token={token}>
+              <AdminDashboard onLogout={handleLogout} />
             </PrivateRoute>
           }
         />

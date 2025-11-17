@@ -17,13 +17,32 @@ export default function Payment({ onLogout }) {
 
   const confirmPayment = async () => {
     try {
+      // First, get the booking details to retrieve class and quota
+      const bookingRes = await fetch(`http://localhost:3000/my-bookings`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const bookingData = await bookingRes.json();
+      if (!bookingData.success) {
+        setError("Failed to retrieve booking details");
+        setShowPopup(false);
+        return;
+      }
+      const booking = bookingData.bookings.find(b => b.id == booking_id);
+      if (!booking) {
+        setError("Booking not found");
+        setShowPopup(false);
+        return;
+      }
+
       const res = await fetch("http://localhost:3000/confirm-booking", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ booking_id }),
+        body: JSON.stringify({ booking_id, class: booking.class, quota: booking.quota }),
       });
       const data = await res.json();
       if (data.success) {

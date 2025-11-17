@@ -18,6 +18,9 @@ export default function Header({ onLogout }) {
           <button onClick={() => navigate("/passengers")} className="hover:bg-blue-700 px-3 py-2 rounded-md transition duration-200">
             My Passengers
           </button>
+          <button onClick={() => navigate("/admin")} className="hover:bg-blue-700 px-3 py-2 rounded-md transition duration-200">
+            Admin
+          </button>
           {onLogout && (
             <button onClick={onLogout} className="bg-red-500 hover:bg-red-600 px-3 py-2 rounded-md transition duration-200">
               Logout

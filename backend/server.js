@@ -1,4 +1,3 @@
-
 import express from "express";
 import Database from "better-sqlite3";
 import cors from "cors";
@@ -17,7 +16,7 @@ app.use(express.json());
 app.use(cors());
 
 // DB initialization
-const dbPath = join(__dirname, "irctcDatabase.db");
+const dbPath = join(__dirname, "itctcDatabase.db");
 const db = new Database(dbPath);
 
 // Create tables if not exist
@@ -47,15 +46,25 @@ db.prepare(`
 db.prepare(`
   CREATE TABLE IF NOT EXISTS trains (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    train_number TEXT NOT NULL,
+    train_number TEXT NOT NULL UNIQUE,
     train_name TEXT NOT NULL,
     origin TEXT NOT NULL,
     destination TEXT NOT NULL,
     date TEXT NOT NULL,
+    departure_time TEXT NOT NULL,
+    arrival_time TEXT NOT NULL
+  );
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS train_classes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    train_id INTEGER NOT NULL,
     class TEXT NOT NULL,
     quota TEXT NOT NULL,
     seats_available INTEGER NOT NULL,
-    price REAL NOT NULL DEFAULT 500
+    price REAL NOT NULL DEFAULT 500,
+    FOREIGN KEY (train_id) REFERENCES trains(id) ON DELETE CASCADE
   );
 `).run();
 
@@ -88,6 +97,8 @@ db.prepare(`
     train_id INTEGER NOT NULL,
     passenger_ids TEXT NOT NULL,
     status TEXT NOT NULL,
+    class TEXT,
+    quota TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (train_id) REFERENCES trains(id)
   );
@@ -223,11 +234,44 @@ app.get("/search-trains", (req, res) => {
 
   try {
     const trains = db.prepare(`
-      SELECT t.*, COALESCE(r.fare_ind, t.price) as fare FROM trains t
+      SELECT t.id, t.train_number, t.train_name, t.origin, t.destination, t.date, t.departure_time, t.arrival_time,
+             tc.class, tc.quota, tc.seats_available, COALESCE(r.fare_ind, tc.price) as fare
+      FROM trains t
+      LEFT JOIN train_classes tc ON t.id = tc.train_id
       LEFT JOIN routes r ON t.origin = r.origin AND t.destination = r.destination
       WHERE LOWER(TRIM(t.origin)) LIKE LOWER(TRIM(?)) AND LOWER(TRIM(t.destination)) LIKE LOWER(TRIM(?)) AND t.date = ?
     `).all('%' + origin.trim() + '%', '%' + destination.trim() + '%', date);
-    res.status(200).json({ success: true, trains });
+
+    // Group by train
+    const groupedTrains = trains.reduce((acc, train) => {
+      const key = train.id;
+      if (!acc[key]) {
+        acc[key] = {
+          id: train.id,
+          train_number: train.train_number,
+          train_name: train.train_name,
+          origin: train.origin,
+          destination: train.destination,
+          date: train.date,
+          departure_time: train.departure_time,
+          arrival_time: train.arrival_time,
+          classes: []
+        };
+      }
+      acc[key].classes.push({
+        class: train.class,
+        quota: train.quota,
+        seats_available: train.seats_available,
+        fare: train.fare
+      });
+      return acc;
+    }, {});
+
+    const result = Object.values(groupedTrains);
+    if (result.length === 0) {
+      return res.status(200).json({ success: true, trains: result, message: "No trains found matching your search criteria." });
+    }
+    res.status(200).json({ success: true, trains: result });
   } catch (error) {
     console.log(error);
     res.status(500).json({ success: false, message: "Server Error" });
@@ -241,9 +285,9 @@ app.get("/check-availability", (req, res) => {
     return res.status(400).json({ success: false, message: "Train ID, class, and quota are required" });
 
   try {
-    const train = db.prepare(`SELECT seats_available FROM trains WHERE id = ? AND class = ? AND quota = ?`).get(train_id, trainClass, quota);
+    const train = db.prepare(`SELECT seats_available FROM train_classes WHERE train_id = ? AND class = ? AND quota = ?`).get(train_id, trainClass, quota);
     if (!train)
-      return res.status(404).json({ success: false, message: "Train not found" });
+      return res.status(404).json({ success: false, message: "Train class not found" });
     res.status(200).json({ success: true, available: train.seats_available > 0, seats: train.seats_available });
   } catch (error) {
     console.log(error);
@@ -253,13 +297,13 @@ app.get("/check-availability", (req, res) => {
 
 // Book ticket
 app.post("/book-ticket", authenticateToken, (req, res) => {
-  const { train_id, passenger_ids } = req.body; // passenger_ids as comma-separated string of user ids
-  if (!train_id || !passenger_ids)
-    return res.status(400).json({ success: false, message: "Train ID and passenger IDs are required" });
+  const { train_id, passenger_ids, class: trainClass, quota } = req.body; // passenger_ids as comma-separated string of user ids
+  if (!train_id || !passenger_ids || !trainClass || !quota)
+    return res.status(400).json({ success: false, message: "Train ID, passenger IDs, class, and quota are required" });
 
   try {
-    const insert = db.prepare(`INSERT INTO bookings(user_id, train_id, passenger_ids, status) VALUES(?, ?, ?, ?)`);
-    const result = insert.run(req.userId, train_id, passenger_ids, "pending");
+    const insert = db.prepare(`INSERT INTO bookings(user_id, train_id, passenger_ids, status, class, quota) VALUES(?, ?, ?, ?, ?, ?)`);
+    const result = insert.run(req.userId, train_id, passenger_ids, "pending", trainClass, quota);
     res.status(200).json({ success: true, booking_id: result.lastInsertRowid, message: "Booking initiated" });
   } catch (error) {
     console.log(error);
@@ -269,9 +313,9 @@ app.post("/book-ticket", authenticateToken, (req, res) => {
 
 // Confirm booking
 app.post("/confirm-booking", authenticateToken, (req, res) => {
-  const { booking_id } = req.body;
-  if (!booking_id)
-    return res.status(400).json({ success: false, message: "Booking ID is required" });
+  const { booking_id, class: trainClass, quota } = req.body;
+  if (!booking_id || !trainClass || !quota)
+    return res.status(400).json({ success: false, message: "Booking ID, class, and quota are required" });
 
   try {
     const update = db.prepare(`UPDATE bookings SET status = ? WHERE id = ? AND user_id = ?`);
@@ -280,7 +324,7 @@ app.post("/confirm-booking", authenticateToken, (req, res) => {
     const booking = db.prepare(`SELECT train_id, passenger_ids FROM bookings WHERE id = ? AND user_id = ?`).get(booking_id, req.userId);
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
     const passengerCount = booking.passenger_ids.split(',').length;
-    db.prepare(`UPDATE trains SET seats_available = seats_available - ? WHERE id = ?`).run(passengerCount, booking.train_id);
+    db.prepare(`UPDATE train_classes SET seats_available = seats_available - ? WHERE train_id = ? AND class = ? AND quota = ?`).run(passengerCount, booking.train_id, trainClass, quota);
     res.status(200).json({ success: true, message: "Booking confirmed" });
   } catch (error) {
     console.log(error);
@@ -290,9 +334,9 @@ app.post("/confirm-booking", authenticateToken, (req, res) => {
 
 // Cancel booking
 app.post("/cancel-booking", authenticateToken, (req, res) => {
-  const { booking_id } = req.body;
-  if (!booking_id)
-    return res.status(400).json({ success: false, message: "Booking ID is required" });
+  const { booking_id, class: trainClass, quota } = req.body;
+  if (!booking_id || !trainClass || !quota)
+    return res.status(400).json({ success: false, message: "Booking ID, class, and quota are required" });
 
   try {
     const update = db.prepare(`UPDATE bookings SET status = ? WHERE id = ? AND user_id = ?`);
@@ -301,7 +345,7 @@ app.post("/cancel-booking", authenticateToken, (req, res) => {
     const booking = db.prepare(`SELECT train_id, passenger_ids FROM bookings WHERE id = ? AND user_id = ?`).get(booking_id, req.userId);
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
     const passengerCount = booking.passenger_ids.split(',').length;
-    db.prepare(`UPDATE trains SET seats_available = seats_available + ? WHERE id = ?`).run(passengerCount, booking.train_id);
+    db.prepare(`UPDATE train_classes SET seats_available = seats_available + ? WHERE train_id = ? AND class = ? AND quota = ?`).run(passengerCount, booking.train_id, trainClass, quota);
     res.status(200).json({ success: true, message: "Booking cancelled" });
   } catch (error) {
     console.log(error);
@@ -311,13 +355,16 @@ app.post("/cancel-booking", authenticateToken, (req, res) => {
 
 // Add train (admin)
 app.post("/add-train", (req, res) => {
-  const { train_number, train_name, origin, destination, date, class: trainClass, quota, seats_available, price } = req.body;
-  if (!train_number || !train_name || !origin || !destination || !date || !trainClass || !quota || !seats_available || !price)
+  const { train_number, train_name, origin, destination, date, departure_time, arrival_time } = req.body;
+  if (!train_number || !train_name || !origin || !destination || !date || !departure_time || !arrival_time)
     return res.status(400).json({ success: false, message: "All fields are required" });
 
   try {
-    const insert = db.prepare(`INSERT INTO trains(train_number, train_name, origin, destination, date, class, quota, seats_available, price) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    insert.run(train_number, train_name, origin, destination, date, trainClass, quota, seats_available, parseFloat(price));
+    // Insert into trains table
+    const insertTrain = db.prepare(`INSERT INTO trains(train_number, train_name, origin, destination, date, departure_time, arrival_time) VALUES(?, ?, ?, ?, ?, ?, ?)`);
+    const trainResult = insertTrain.run(train_number, train_name, origin, destination, date, departure_time, arrival_time);
+    const trainId = trainResult.lastInsertRowid;
+
     res.status(200).json({ success: true, message: "Train added" });
   } catch (error) {
     console.log(error);
@@ -329,10 +376,40 @@ app.post("/add-train", (req, res) => {
 app.get("/get-trains", (req, res) => {
   try {
     const trains = db.prepare(`
-      SELECT t.*, COALESCE(r.fare_ind, t.price) as fare FROM trains t
+      SELECT t.id, t.train_number, t.train_name, t.origin, t.destination, t.date, t.departure_time, t.arrival_time,
+             tc.class, tc.quota, tc.seats_available, COALESCE(r.fare_ind, tc.price) as fare
+      FROM trains t
+      LEFT JOIN train_classes tc ON t.id = tc.train_id
       LEFT JOIN routes r ON t.origin = r.origin AND t.destination = r.destination
     `).all();
-    res.status(200).json({ success: true, trains });
+
+    // Group by train
+    const groupedTrains = trains.reduce((acc, train) => {
+      const key = train.id;
+      if (!acc[key]) {
+        acc[key] = {
+          id: train.id,
+          train_number: train.train_number,
+          train_name: train.train_name,
+          origin: train.origin,
+          destination: train.destination,
+          date: train.date,
+          departure_time: train.departure_time,
+          arrival_time: train.arrival_time,
+          classes: []
+        };
+      }
+      acc[key].classes.push({
+        class: train.class,
+        quota: train.quota,
+        seats_available: train.seats_available,
+        fare: train.fare
+      });
+      return acc;
+    }, {});
+
+    const result = Object.values(groupedTrains);
+    res.status(200).json({ success: true, trains: result });
   } catch (error) {
     console.log(error);
     res.status(500).json({ success: false, message: "Server Error" });
@@ -343,7 +420,7 @@ app.get("/get-trains", (req, res) => {
 app.get("/my-bookings", authenticateToken, (req, res) => {
   try {
     const bookings = db.prepare(`
-      SELECT b.id, b.status, t.train_number, t.origin, t.destination, t.date, t.class, t.quota
+      SELECT b.id, b.status, b.class, b.quota, t.train_number, t.origin, t.destination, t.date
       FROM bookings b
       JOIN trains t ON b.train_id = t.id
       WHERE b.user_id = ?
@@ -397,7 +474,7 @@ app.get("/get-all-users", (req, res) => {
 app.get("/get-all-bookings", (req, res) => {
   try {
     const bookings = db.prepare(`
-      SELECT b.id, b.status, b.passenger_ids, u.name as user_name, u.email as user_email, t.train_number, t.train_name, t.origin, t.destination, t.date, t.class, t.quota
+      SELECT b.id, b.status, b.passenger_ids, b.class, b.quota, u.name as user_name, u.email as user_email, t.train_number, t.train_name, t.origin, t.destination, t.date
       FROM bookings b
       JOIN users u ON b.user_id = u.id
       JOIN trains t ON b.train_id = t.id
